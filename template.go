@@ -20,9 +20,45 @@ type Template struct {
 	Scalars []*ScalarValue `json:"scalarValueTypes"`
 }
 
+func ShouldIncludeToDoc(comment *protokit.Comment, targets []string, filterTarget string) bool {
+	if comment == nil {
+		return false
+	}
+	if filterTarget == "" {
+		return true
+	}
+	if strings.Contains(comment.GetLeading(), "@all") {
+		return true
+	}
+	for _, target := range targets {
+		if target == filterTarget {
+			if strings.Contains(comment.GetLeading(), fmt.Sprintf("@%s", filterTarget)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TrimFilterTarget(comment *protokit.Comment, filterTarget string) string {
+	if comment == nil {
+		return ""
+	}
+	if filterTarget == "" {
+		return comment.GetLeading()
+	}
+	if strings.Contains(comment.GetLeading(), "@all") {
+		return strings.ReplaceAll(comment.GetLeading(), fmt.Sprintf("@all"), "")
+	}
+	return strings.ReplaceAll(comment.GetLeading(), fmt.Sprintf("@%s", filterTarget), "")
+}
+
 // NewTemplate creates a Template object from a set of descriptors.
-func NewTemplate(descs []*protokit.FileDescriptor) *Template {
+func NewTemplate(descs []*protokit.FileDescriptor, option FilterOption) *Template {
 	files := make([]*File, 0, len(descs))
+
+	serviceFiles := make([]*File, 0, len(descs))
+	otherFiles := make([]*File, 0, len(descs))
 
 	for _, f := range descs {
 		file := &File{
@@ -41,16 +77,28 @@ func NewTemplate(descs []*protokit.FileDescriptor) *Template {
 		}
 
 		for _, e := range f.Enums {
+			if option.isEnabled() && !ShouldIncludeToDoc(e.GetComments(), option.TargetPlatforms, option.TargetPlatform) {
+				continue
+			}
+			e.Comments.Leading = TrimFilterTarget(e.GetComments(), option.TargetPlatform)
 			file.Enums = append(file.Enums, parseEnum(e))
 		}
 
 		for _, e := range f.Extensions {
+			if option.isEnabled() && !ShouldIncludeToDoc(e.GetComments(), option.TargetPlatforms, option.TargetPlatform) {
+				continue
+			}
+			e.Comments.Leading = TrimFilterTarget(e.Comments, option.TargetPlatform)
 			file.Extensions = append(file.Extensions, parseFileExtension(e))
 		}
 
 		// Recursively add nested types from messages
 		var addFromMessage func(*protokit.Descriptor)
 		addFromMessage = func(m *protokit.Descriptor) {
+			if option.isEnabled() && !ShouldIncludeToDoc(m.GetComments(), option.TargetPlatforms, option.TargetPlatform) {
+				return
+			}
+			m.Comments.Leading = TrimFilterTarget(m.Comments, option.TargetPlatform)
 			file.Messages = append(file.Messages, parseMessage(m))
 			for _, e := range m.Enums {
 				file.Enums = append(file.Enums, parseEnum(e))
@@ -64,14 +112,42 @@ func NewTemplate(descs []*protokit.FileDescriptor) *Template {
 		}
 
 		for _, s := range f.Services {
+			if option.isEnabled() && !ShouldIncludeToDoc(s.GetComments(), option.TargetPlatforms, option.TargetPlatform) {
+				continue
+			}
+			s.Comments.Leading = TrimFilterTarget(s.Comments, option.TargetPlatform)
+			filteredMethods := make([]*protokit.MethodDescriptor, 0, len(s.Methods))
+			for _, method := range s.Methods {
+				if option.isEnabled() && !ShouldIncludeToDoc(method.GetComments(), option.TargetPlatforms, option.TargetPlatform) {
+					continue
+				}
+				method.Comments.Leading = TrimFilterTarget(method.Comments, option.TargetPlatform)
+				filteredMethods = append(filteredMethods, method)
+			}
+			s.Methods = filteredMethods
 			file.Services = append(file.Services, parseService(s))
 		}
 
+		if !file.HasData() {
+			continue
+		}
 		sort.Sort(file.Enums)
 		sort.Sort(file.Extensions)
 		sort.Sort(file.Messages)
 		sort.Sort(file.Services)
 
+		if strings.HasSuffix(file.Name, "service.proto") {
+			serviceFiles = append(serviceFiles, file)
+		} else {
+			otherFiles = append(otherFiles, file)
+		}
+	}
+
+	for _, file := range serviceFiles {
+		files = append(files, file)
+	}
+
+	for _, file := range otherFiles {
 		files = append(files, file)
 	}
 
@@ -145,6 +221,10 @@ type File struct {
 
 // Option returns the named option.
 func (f File) Option(name string) interface{} { return f.Options[name] }
+
+func (f File) HasData() bool {
+	return len(f.Enums) > 0 || len(f.Extensions) > 0 || len(f.Messages) > 0 || len(f.Services) > 0
+}
 
 // FileExtension contains details about top-level extensions within a proto(2) file.
 type FileExtension struct {
@@ -312,13 +392,12 @@ func (v EnumValue) Option(name string) interface{} { return v.Options[name] }
 
 // Service contains details about a service definition within a proto file.
 type Service struct {
-	Name        string           `json:"name"`
-	LongName    string           `json:"longName"`
-	FullName    string           `json:"fullName"`
-	Description string           `json:"description"`
-	Methods     []*ServiceMethod `json:"methods"`
-
-	Options map[string]interface{} `json:"options,omitempty"`
+	Name        string                 `json:"name"`
+	LongName    string                 `json:"longName"`
+	FullName    string                 `json:"fullName"`
+	Description string                 `json:"description"`
+	Methods     []*ServiceMethod       `json:"methods"`
+	Options     map[string]interface{} `json:"options,omitempty"`
 }
 
 // Option returns the named option.
@@ -566,7 +645,7 @@ func parseType(tc typeContainer) (string, string, string) {
 }
 
 func description(comment string) string {
-	val := strings.TrimLeft(comment, "*/\n ")
+	val := strings.TrimLeft(comment, "*/ ")
 	if strings.HasPrefix(val, "@exclude") {
 		return ""
 	}

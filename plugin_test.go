@@ -150,3 +150,43 @@ func TestRunPluginForSourceRelative(t *testing.T) {
 	require.NotEmpty(t, resp.File[0].GetContent())
 	require.NotEmpty(t, resp.File[1].GetContent())
 }
+
+func TestRunPluginWithFilterOption(t *testing.T) {
+	req := new(plugin_go.CodeGeneratorRequest)
+	//<TYPE|TEMPLATE_FILE>,<OUTPUT_FILE>[,default|source_relative],[ios,aos,unreal]:<EXCLUDE_PATTERN>,<EXCLUDE_PATTERN>*.
+	tests := []struct {
+		name   string
+		option string
+		want   *PluginOptions
+	}{
+		{
+			"case#1: all options are specified",
+			"markdown,index.md,ios:ios,aos,unreal:google/*,notgoogle/*",
+			&PluginOptions{
+				FilterOption: FilterOption{
+					TargetPlatforms: []string{"ios", "aos", "unreal"},
+					TargetPlatform:  "ios",
+				},
+			},
+		},
+		{
+			"case#2: excludePattern is omitted",
+			"markdown,index.md,ios:ios,aos,unreal",
+			&PluginOptions{
+				FilterOption: FilterOption{
+					TargetPlatforms: []string{"ios", "aos", "unreal"},
+					TargetPlatform:  "ios",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		req.Parameter = proto.String(tt.option)
+		option, err := ParseOptionsWithFilterOption(req)
+		require.Equal(t, tt.want.FilterOption.TargetPlatforms, option.FilterOption.TargetPlatforms)
+		require.Equal(t, tt.want.FilterOption.TargetPlatform, option.FilterOption.TargetPlatform)
+		require.NoError(t, err)
+	}
+
+}

@@ -21,6 +21,16 @@ type PluginOptions struct {
 	OutputFile      string
 	ExcludePatterns []*regexp.Regexp
 	SourceRelative  bool
+	FilterOption    FilterOption
+}
+
+type FilterOption struct {
+	TargetPlatforms []string
+	TargetPlatform  string
+}
+
+func (o FilterOption) isEnabled() bool {
+	return len(o.TargetPlatforms) > 0 || o.TargetPlatform != ""
 }
 
 // SupportedFeatures describes a flag setting for supported features.
@@ -32,7 +42,9 @@ type Plugin struct{}
 // Generate compiles the documentation and generates the CodeGeneratorResponse to send back to protoc. It does this
 // by rendering a template based on the options parsed from the CodeGeneratorRequest.
 func (p *Plugin) Generate(r *plugin_go.CodeGeneratorRequest) (*plugin_go.CodeGeneratorResponse, error) {
-	options, err := ParseOptions(r)
+	//options, err := ParseOptions(r)
+	options, err := ParseOptionsWithFilterOption(r)
+
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +65,7 @@ func (p *Plugin) Generate(r *plugin_go.CodeGeneratorRequest) (*plugin_go.CodeGen
 	resp := new(plugin_go.CodeGeneratorResponse)
 	fdsGroup := groupProtosByDirectory(result, options.SourceRelative)
 	for dir, fds := range fdsGroup {
-		template := NewTemplate(fds)
+		template := NewTemplate(fds, options.FilterOption)
 
 		output, err := RenderTemplate(options.Type, template, customTemplate)
 		if err != nil {
@@ -162,6 +174,71 @@ func ParseOptions(req *plugin_go.CodeGeneratorRequest) (*PluginOptions, error) {
 	if err == nil {
 		options.Type = renderType
 		options.TemplateFile = ""
+	}
+
+	return options, nil
+}
+
+func ParseOptionsWithFilterOption(req *plugin_go.CodeGeneratorRequest) (*PluginOptions, error) {
+	options := &PluginOptions{
+		Type:           RenderTypeHTML,
+		TemplateFile:   "",
+		OutputFile:     "index.html",
+		SourceRelative: false,
+	}
+
+	params := req.GetParameter()
+	if strings.Contains(params, ":") {
+		// Parse out exclude patterns if any
+		parts := strings.Split(params, ":")
+
+		if len(parts) >= 2 {
+			options.FilterOption.TargetPlatforms = strings.Split(parts[1], ",")
+		}
+		if len(parts) >= 3 {
+			for _, pattern := range strings.Split(parts[2], ",") {
+				r, err := regexp.Compile(pattern)
+				if err != nil {
+					return nil, err
+				}
+				options.ExcludePatterns = append(options.ExcludePatterns, r)
+			}
+		}
+		// The first part is parsed below
+		params = parts[0]
+	}
+	if params == "" {
+		return options, nil
+	}
+
+	if !strings.Contains(params, ",") {
+		return nil, fmt.Errorf("Invalid parameter: %s", params)
+	}
+
+	parts := strings.Split(params, ",")
+	if len(parts) < 3 || len(parts) > 4 {
+		return nil, fmt.Errorf("Invalid parameter: %s", params)
+	}
+
+	options.TemplateFile = parts[0]
+	options.OutputFile = path.Base(parts[1])
+	if len(parts) > 3 {
+		switch parts[2] {
+		case "source_relative":
+			options.SourceRelative = true
+		case "default":
+			options.SourceRelative = false
+		default:
+			return nil, fmt.Errorf("Invalid parameter: %s", params)
+		}
+	}
+	options.SourceRelative = len(parts) > 3 && parts[2] == "source_relative"
+
+	renderType, err := NewRenderType(options.TemplateFile)
+	if err == nil {
+		options.Type = renderType
+		options.TemplateFile = ""
+		options.FilterOption.TargetPlatform = parts[2]
 	}
 
 	return options, nil

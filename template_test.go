@@ -29,14 +29,14 @@ func TestMain(m *testing.M) {
 	req := utils.CreateGenRequest(set, "Booking.proto", "Vehicle.proto")
 	result := protokit.ParseCodeGenRequest(req)
 
-	template = NewTemplate(result)
+	template = NewTemplate(result, FilterOption{})
 	bookingFile = template.Files[0]
 	vehicleFile = template.Files[1]
 
 	set, _ = utils.LoadDescriptorSet("fixtures", "cookie.pb")
 	req = utils.CreateGenRequest(set, "Cookie.proto")
 	result = protokit.ParseCodeGenRequest(req)
-	cookieTemplate = NewTemplate(result)
+	cookieTemplate = NewTemplate(result, FilterOption{})
 	cookieFile = cookieTemplate.Files[0]
 
 	os.Exit(m.Run())
@@ -494,4 +494,115 @@ func findField(name string, m *Message) *MessageField {
 	}
 
 	return nil
+}
+
+func Test_shouldIncludeToDoc(t *testing.T) {
+	targetPlatforms := []string{"ios", "android", "unreal,all"}
+	type args struct {
+		comment      *protokit.Comment
+		filterTarget string
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "If filterTarget is one of TargetPlatforms, and comment has filter target, return true",
+			args: args{
+				comment: &protokit.Comment{
+					Leading: "@ios",
+				},
+				filterTarget: "ios",
+			},
+			want: true,
+		},
+		{
+			name: "If filterTarget is one of TargetPlatforms, and target in comment is different from filterTarget, return false",
+			args: args{
+				comment: &protokit.Comment{
+					Leading: "@ios",
+				},
+				filterTarget: "test",
+			},
+			want: false,
+		},
+		{
+			name: "If filterTarget empty, return true",
+			args: args{
+				comment: &protokit.Comment{
+					Leading: "@test",
+				},
+				filterTarget: "",
+			},
+			want: true,
+		},
+		{
+			name: "If comment has @all, return true",
+			args: args{
+				comment: &protokit.Comment{
+					Leading: "@all",
+				},
+				filterTarget: "test",
+			},
+			want: true,
+		},
+		{
+			name: "If comment contains one of TargetPlatform but that targetPlatform is not filterTarget, return false",
+			args: args{
+				comment: &protokit.Comment{
+					Leading: "@aos",
+				},
+				filterTarget: "ios",
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ShouldIncludeToDoc(tt.args.comment, targetPlatforms, tt.args.filterTarget); got != tt.want {
+				t.Errorf("ShouldIncludeToDoc() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTrimFilterTarget(t *testing.T) {
+	type args struct {
+		comment      *protokit.Comment
+		filterTarget string
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "If filterTarget exists in leading comment, remove that annotation",
+			args: args{
+				comment: &protokit.Comment{
+					Leading: "@ios",
+				},
+				filterTarget: "ios",
+			},
+			want: "",
+		},
+		{
+			name: "If filterTarget does not exist in leading comment, then annotation is not removed",
+			args: args{
+				comment: &protokit.Comment{
+					Leading: "@ios",
+				},
+				filterTarget: "",
+			},
+			want: "@ios",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := TrimFilterTarget(tt.args.comment, tt.args.filterTarget); got != tt.want {
+				t.Errorf("TrimFilterTarget() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
